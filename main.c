@@ -63,7 +63,7 @@ typedef struct pini__vector_header {
     do {                                          \
         if (vec) pini__vec_header(vec)->size = 0; \
     } while (0)
-#define pini__vec_foreach(type, vec, it) for (type *it = (vec); it < (vec)+pini__vec_size(vec); it++)
+#define pini__vec_foreach(type, vec, iter) for (type *iter = (vec); iter < (vec)+pini__vec_size(vec); iter++)
 void *pini__vec_grow(void *vec, size_t item_size);
 
 void *pini__vec_grow(void *vec, size_t item_size)
@@ -126,14 +126,16 @@ typedef enum Pini_Value_Type {
     PINI_VALUE_ARRAY
 } Pini_Value_Type;
 
-typedef struct Pini_Value {
+typedef struct Pini_Value Pini_Value;
+struct Pini_Value {
     Pini_Value_Type type;
     union {
         double number;
         char *string;
         bool boolean;
+        Pini_Value *array;
     } as;
-} Pini_Value;
+};
 
 typedef struct Pini_Entry {
     char *key;
@@ -230,19 +232,9 @@ Pini_Token pini__lexer_scan_number(void)
 
     if (pini__lexer_peek() == '.' &&
         pini__lexer_is_digit(pini__lexer_peek_next())) {
-        pini__lexer_advance();
+        pini__lexer_advance(); // consume '.'
         while (pini__lexer_is_digit(pini__lexer_peek())) {
             pini__lexer_advance();
-        }
-        while (1) {
-            char c = pini__lexer_peek();
-            if (pini__lexer_is_digit(c)) {
-                pini__lexer_advance();
-            } else if (pini__lexer_is_whitespace(c)) {
-                break;
-            } else {
-                return pini__lexer_error_token("invalid number");
-            }
         }
     }
 
@@ -258,8 +250,8 @@ Pini_Token pini__lexer_scan_string(void)
     if (pini__lexer_at_end()) {
         return pini__lexer_error_token("unterminated string");
     }
+    pini__lexer_advance(); // consume right '"'
 
-    pini__lexer_advance();
     return pini__lexer_make_token(PINI_TOKEN_STRING);
 }
 
@@ -280,6 +272,7 @@ void pini__lexer_skip_whitespace(void)
     for (;;) {
         char c = pini__lexer_peek();
         switch (c) {
+        // whitesapce
         case ' ':
         case '\r':
         case '\t':
@@ -289,7 +282,9 @@ void pini__lexer_skip_whitespace(void)
             _lexer.line++;
             pini__lexer_advance();
             break;
+        // comment
         case ';':
+        case '#':
             while (!pini__lexer_at_end() && pini__lexer_peek() != '\n') pini__lexer_advance();
             break;
         default:
@@ -306,15 +301,20 @@ Pini_Token pini__lexer_scan_token(void)
     if (pini__lexer_at_end()) return pini__lexer_make_token(PINI_TOKEN_EOF);
 
     char c = pini__lexer_advance();
-    if (pini__lexer_is_digit(c)) return pini__lexer_scan_number();
-    if (pini__lexer_is_alpha(c)) return pini__lexer_scan_identifier();
 
+    // literal
+    if (pini__lexer_is_digit(c) || (c == '-' && pini__lexer_is_digit(pini__lexer_peek()))) {
+        return pini__lexer_scan_number();
+    }
+    if (pini__lexer_is_alpha(c)) return pini__lexer_scan_identifier();
+    if (c == '"') return pini__lexer_scan_string();
+
+    // punctuation
     switch (c) {
     case '[': return pini__lexer_make_token(PINI_TOKEN_LEFT_SQUARE_BRACKET);
     case ']': return pini__lexer_make_token(PINI_TOKEN_RIGHT_SQUARE_BRACKET);
     case '=': return pini__lexer_make_token(PINI_TOKEN_EQUAL);
     case ',': return pini__lexer_make_token(PINI_TOKEN_COMMA);
-    case '"': return pini__lexer_scan_string();
     default:  return pini__lexer_error_token("unknown character: '%c'", c);
     }
 }
@@ -381,7 +381,7 @@ void pini__parser_init(void)
     }
 }
 
-char *strdup_with_len(const char *s, size_t len)
+char *pini__strdup(const char *s, size_t len)
 {
     char *buffer = malloc(len + 1);
     assert(buffer != NULL);
@@ -390,75 +390,154 @@ char *strdup_with_len(const char *s, size_t len)
     return buffer;
 }
 
-void pini__parser_parse_value(Pini_Value *value)
+void pini__free_value(Pini_Value *value)
 {
-    if (_parser.had_error) return;
+    switch (value->type) {
+    case PINI_VALUE_STRING:
+        if (value->as.string) free(value->as.string);
+        value->as.string = NULL;
+        break;
+    case PINI_VALUE_ARRAY:
+        if (value->as.array) {
+            pini__vec_foreach(Pini_Value, value->as.array, iter) {
+                pini__free_value(iter);
+            }
+            pini__vec_free(value->as.array);
+        }
+        break;
+    default:
+        break;
+    }
+}
 
-    if (!pini__parser_consume_value()) return;
+void pini__free_entry(Pini_Entry *entry)
+{
+    if (entry->key) free(entry->key);
+    entry->key = NULL;
+    pini__free_value(&entry->value);
+}
+
+void pini__free_section(Pini_Section *section)
+{
+    if (section->name) free(section->name);
+    section->name = NULL;
+    pini__vec_foreach(Pini_Entry, section->entries, entry) {
+        pini__free_entry(entry);
+    }
+    pini__vec_free(section->entries);
+}
+
+bool pini__parser_parse_value(Pini_Value *value);
+
+bool pini__parser_parse_array(Pini_Value *value)
+{
+    // Empty array
+    if (pini__parser_peek() == PINI_TOKEN_RIGHT_SQUARE_BRACKET) {
+        pini__parser_advance();
+        return true;
+    }
+
+    while (true) {
+        Pini_Value item;
+        if (!pini__parser_parse_value(&item)) return false;
+        pini__vec_push(value->as.array, item);
+        if (pini__parser_peek() != PINI_TOKEN_COMMA) break;
+        pini__parser_advance();
+        if (pini__parser_peek() == PINI_TOKEN_RIGHT_SQUARE_BRACKET) break;
+    }
+    if (!pini__parser_consume(PINI_TOKEN_RIGHT_SQUARE_BRACKET, "array should end with ']'")) return false;
+
+    return true;
+}
+
+bool pini__parser_parse_value(Pini_Value *value)
+{
+    if (_parser.had_error) return false;
+
+    pini__parser_advance(); // it may be a error token
+    if (_parser.had_error) return false;
+
     switch (_parser.previous.type) {
     case PINI_TOKEN_STRING:
         value->type = PINI_VALUE_STRING;
-        value->as.string = strdup_with_len(_parser.previous.start, _parser.previous.length);
-        break;
+        value->as.string = pini__strdup(_parser.previous.start+1, _parser.previous.length-2);
+        return true;
+
     case PINI_TOKEN_NUMBER:
+        // FIXME: strtod may overflow
         value->type = PINI_VALUE_NUMBER;
-        // TODO: value->as.number = ...
-        break;
+        char *tmp = malloc(_parser.previous.length + 1);
+        assert(tmp != NULL);
+        memcpy(tmp, _parser.previous.start, _parser.previous.length);
+        tmp[_parser.previous.length] = '\0';
+        value->as.number = strtod(tmp, NULL);
+        free(tmp);
+        return true;
+
     case PINI_TOKEN_TRUE:
         value->type = PINI_VALUE_BOOLEAN;
         value->as.boolean = true;
-        break;
+        return true;
+
     case PINI_TOKEN_FALSE:
         value->type = PINI_VALUE_BOOLEAN;
         value->as.boolean = false;
-        break;
+        return true;
+
+    case PINI_TOKEN_LEFT_SQUARE_BRACKET:
+        value->type = PINI_VALUE_ARRAY;
+        value->as.array = NULL; // initialzed array for 'pini__vec_push'
+        return pini__parser_parse_array(value);
+
     default:
-        // unreachable
-        break;
+        pini__parser_error("invalid value", _parser.previous.line);
+        return false;
     }
 }
 
-void pini__parser_parse_pair(Pini_Section *section)
+bool pini__parser_parse_pair(Pini_Section *section)
 {
     Pini_Entry entry;
 
-    if (_parser.had_error) return;
+    if (_parser.had_error) return false;
 
-    if (!pini__parser_consume(PINI_TOKEN_IDENTIFIER, "invalid key name")) return;
-    entry.key = strdup_with_len(_parser.previous.start, _parser.previous.length);
+    if (!pini__parser_consume(PINI_TOKEN_IDENTIFIER, "invalid key")) return false;
+    entry.key = pini__strdup(_parser.previous.start, _parser.previous.length);
+    if (!pini__parser_consume(PINI_TOKEN_EQUAL, "it should be '=' after the key")) return false;
+    if (!pini__parser_parse_value(&entry.value)) return false;
+    pini__vec_push(section->entries, entry);
 
-    if (!pini__parser_consume(PINI_TOKEN_EQUAL, "it should be '=' after the key")) return;
-    pini__parser_parse_value(&entry.value);
-
-    if (!_parser.had_error) pini__vec_push(section->entries, entry);
+    return true;
 }
 
-void pini__parser_parse_section(Pini_Context *ctx)
+bool pini__parser_parse_section(Pini_Context *ctx)
 {
-    Pini_Section section = {.entries = NULL};
+    Pini_Section section = {.entries = NULL}; // initialize array for 'pini__vec_push'
 
-    if (_parser.had_error) return;
+    if (_parser.had_error) return false;
 
-    if (!pini__parser_consume(PINI_TOKEN_IDENTIFIER, "invalid section name after '['")) return;
-    section.name = strdup_with_len(_parser.previous.start, _parser.previous.length);
-    if (!pini__parser_consume(PINI_TOKEN_RIGHT_SQUARE_BRACKET, "']' should be after section name")) return;
+    if (!pini__parser_consume(PINI_TOKEN_IDENTIFIER, "invalid section name after '['")) return false;
+    section.name = pini__strdup(_parser.previous.start, _parser.previous.length);
+    if (!pini__parser_consume(PINI_TOKEN_RIGHT_SQUARE_BRACKET, "']' should be after section name")) return false;
 
     while (!pini__parser_at_end() && pini__parser_peek() != PINI_TOKEN_LEFT_SQUARE_BRACKET &&
             pini__parser_peek() != PINI_TOKEN_ERROR) {
-        pini__parser_parse_pair(&section);
+        if (!pini__parser_parse_pair(&section)) return false;
     }
+    pini__vec_push(ctx->sections, section);
 
-    if (!_parser.had_error) pini__vec_push(ctx->sections, section);
+    return true;
 }
 
 bool pini__parser_parse(Pini_Context *ctx)
 {
     while (1) {
         if (pini__parser_consume(PINI_TOKEN_LEFT_SQUARE_BRACKET, "start a section with [...]")) {
-            pini__parser_parse_section(ctx);
+            if (!pini__parser_parse_section(ctx)) return false;
+        } else {
+            return false;
         }
         if (pini__parser_at_end()) break;
-        if (_parser.had_error) return false;
     }
     return true;
 }
@@ -481,13 +560,24 @@ bool pini_load(Pini_Context *ctx, const char *filename)
     pini__parser_init();
     bool status = pini__parser_parse(ctx);
     if (!status) return false;
-    for (size_t i = 0; i < pini__vec_size(ctx->sections); i++) {
-        Pini_Section *section = &ctx->sections[i];
+    pini__vec_foreach(Pini_Section, ctx->sections, section) {
         printf("name: %s\n", section->name);
-        for (size_t j = 0; j < pini__vec_size(section->entries); j++) {
-            Pini_Entry *entry = &section->entries[j];
+        pini__vec_foreach(Pini_Entry, section->entries, entry) {
             printf("key: %s\n", entry->key);
-            printf("val:   \n");
+            switch (entry->value.type) {
+            case PINI_VALUE_NUMBER:
+                printf("val: %g\n", entry->value.as.number);
+                break;
+            case PINI_VALUE_STRING:
+                printf("val: %s\n", entry->value.as.string);
+                break;
+            case PINI_VALUE_BOOLEAN:
+                printf("val: %s\n", entry->value.as.boolean ? "true" : "false");
+                break;
+            case PINI_VALUE_ARRAY:
+                printf("val: %zu\n", pini__vec_size(entry->value.as.array));
+                break;
+            }
         }
     }
     return true;
@@ -496,7 +586,12 @@ bool pini_load(Pini_Context *ctx, const char *filename)
 
 void pini_unload(Pini_Context *ctx)
 {
+    pini__vec_foreach(Pini_Section, ctx->sections, section) {
+        pini__free_section(section);
+    }
+    pini__vec_free(ctx->sections);
     if (ctx->source) free(ctx->source);
+    ctx->source = NULL;
 }
 
 int main(void)
