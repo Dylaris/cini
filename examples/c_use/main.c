@@ -4,7 +4,7 @@
 int main(void)
 {
     Pini_Context ctx;
-    if (!pini_load(&ctx, "config.ini")) {
+    if (!pini_load(&ctx, "../config.ini")) {
         printf("Error: Failed to load configuration file\n");
         return 1;
     }
