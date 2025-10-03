@@ -22,13 +22,11 @@ ffi.cdef[[
     bool pini_load(Pini_Context *ctx, const char *filename);
     void pini_unload(Pini_Context *ctx);
     void pini_dump(Pini_Context *ctx);
-    double pini_get_number(Pini_Context *ctx, const char *section_name, const char *key_name);
-    const char *pini_get_string(Pini_Context *ctx, const char *section_name, const char *key_name);
-    bool pini_get_bool(Pini_Context *ctx, const char *section_name, const char *key_name);
+    Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name);
+    bool pini_has_section(Pini_Context *ctx, const char *section_name);
 
     Pini_Context *pini_new_context(void);
     void pini_free_context(Pini_Context *ctx);
-    Pini_Value *pini_get_value(Pini_Context *ctx, const char *section_name, const char *key_name);
 ]]
 
 -- load dynamic library
@@ -61,7 +59,7 @@ end
 
 function pini:lookup(section, key)
     local ok, valptr = pcall(function()
-        return cpini.pini_get_value(self.ctx, section, key)
+        return cpini.pini_lookup(self.ctx, section, key)
     end)
 
     -- only 'valptr == nil' means 'valptr == NULL', do not use 'not valptr'
@@ -80,6 +78,10 @@ function pini:lookup(section, key)
     else
         return nil, string.format("unknown value type for [%s:%s]", section, key)
     end
+end
+
+function pini:has(section)
+    return cpini.pini_has_section(self.ctx, section)
 end
 
 function pini:dump()

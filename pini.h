@@ -71,9 +71,14 @@ typedef struct Pini_Context {
 bool pini_load(Pini_Context *ctx, const char *filename);
 void pini_unload(Pini_Context *ctx);
 void pini_dump(Pini_Context *ctx);
-double pini_get_number(Pini_Context *ctx, const char *section_name, const char *key_name);
-const char *pini_get_string(Pini_Context *ctx, const char *section_name, const char *key_name);
-bool pini_get_bool(Pini_Context *ctx, const char *section_name, const char *key_name);
+Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name);
+bool pini_has_section(Pini_Context *ctx, const char *section_name);
+static inline bool pini_is_number(Pini_Value *val)  { return val->type == PINI_VALUE_NUMBER; }
+static inline bool pini_is_boolean(Pini_Value *val) { return val->type == PINI_VALUE_BOOLEAN; }
+static inline bool pini_is_string(Pini_Value *val)  { return val->type == PINI_VALUE_STRING; }
+static inline double pini_to_number(Pini_Value *val)      { return val->as.number; }
+static inline bool pini_to_boolean(Pini_Value *val)       { return val->as.boolean; }
+static inline const char *pini_to_string(Pini_Value *val) { return val->as.string; }
 
 #endif // PINI_H
 
@@ -161,15 +166,6 @@ static Pini_Pair *pini__get_pair(Pini_Pair *pairs, const char *name)
         if (strcmp(pair->key, name) == 0) return pair;
     }
     return NULL;
-}
-
-static Pini_Value *pini__get_value(Pini_Context *ctx, const char *section_name, const char *key_name)
-{
-    Pini_Section *section = pini__get_section(ctx->sections, section_name);
-    if (!section) return NULL;
-    Pini_Pair *pair = pini__get_pair(section->pairs, key_name);
-    if (!pair) return NULL;
-    return &pair->val;
 }
 
 // TODO: support array
@@ -338,25 +334,23 @@ void pini_unload(Pini_Context *ctx)
     ctx->current_section = NULL;
 }
 
-double pini_get_number(Pini_Context *ctx, const char *section_name, const char *key_name)
+Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name)
 {
-    Pini_Value *val = pini__get_value(ctx, section_name, key_name);
-    assert(val && val->type == PINI_VALUE_NUMBER);
-    return val->as.number;
+    if (!section_name) return NULL;
+    Pini_Section *section = pini__get_section(ctx->sections, section_name);
+    if (!section) return NULL;
+    Pini_Pair *pair = pini__get_pair(section->pairs, key_name);
+    if (!pair) return NULL;
+    return &pair->val;
 }
 
-const char *pini_get_string(Pini_Context *ctx, const char *section_name, const char *key_name)
+// TODO: use hash table
+bool pini_has_section(Pini_Context *ctx, const char *section_name)
 {
-    Pini_Value *val = pini__get_value(ctx, section_name, key_name);
-    assert(val && val->type == PINI_VALUE_STRING);
-    return val->as.string;
-}
-
-bool pini_get_bool(Pini_Context *ctx, const char *section_name, const char *key_name)
-{
-    Pini_Value *val = pini__get_value(ctx, section_name, key_name);
-    assert(val && val->type == PINI_VALUE_BOOLEAN);
-    return val->as.boolean;
+    pini__vec_foreach(Pini_Section, ctx->sections, section) {
+        if (strcmp(section->name, section_name) == 0) return true;
+    }
+    return false;
 }
 
 #undef pini__vec_header

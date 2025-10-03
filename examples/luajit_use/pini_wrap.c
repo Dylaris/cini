@@ -16,8 +16,3 @@ void pini_free_context(Pini_Context *ctx)
         free(ctx);
     }
 }
-
-Pini_Value *pini_get_value(Pini_Context *ctx, const char *section_name, const char *key_name)
-{
-    return pini__get_value(ctx, section_name, key_name);
-}

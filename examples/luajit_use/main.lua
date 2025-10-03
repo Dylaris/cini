@@ -17,3 +17,6 @@ print(string.format("  Host: %s",     ctx:lookup("database", "host")))
 print(string.format("  Port: %.0f",   ctx:lookup("database", "port")))
 print(string.format("  Username: %s", ctx:lookup("database", "username")))
 print(string.format("  Use SSL: %s",  ctx:lookup("database", "use_ssl") and "Yes" or "No"))
+
+print(ctx:has("server") and "you have [server] section" or "you do not have [server] section")
+print(ctx:has("non-exist") and "you have [non-exist] section" or "you do not have [non-exist] section")
