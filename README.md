@@ -7,9 +7,20 @@ Parser of 'ini' file implemented with C99 as a stb-style library.
 ## Usage
 
 ```c
+    Pini_Context ctx;
     pini_load(&ctx, "config.ini");
-    const char *name = pini_get_string(&ctx, "profile", "name");
-    size_t age       = (size_t)pini_get_number(&ctx, "profile", "age");
-    bool is_student  = pini_get_bool(&ctx, "profile", "is_student");
+
+    Pini_Query query = {.section = "profile"};
+
+    query.key = "name";
+    const char *name = pini_get_string(&ctx, &query);
+    if (query->errcode != PINI_OK) {...}
+
+    query.key = "age";
+    size_t age = pini_get_number(&ctx, &query);
+
+    query.key = "flag";
+    bool flag = pini_get_boolean(&ctx, &query);
+
     pini_unload(&ctx);
 ```

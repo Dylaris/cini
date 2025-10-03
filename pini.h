@@ -8,10 +8,6 @@ BRIEF:
 NOTICE:
   Do not support nested section and array.
   Not compatible with C++. (no test)
-  Error handling is minimal. Ensure correct usage:
-    - Keys and sections must exist when querying
-    - File must be properly formatted
-    - No type safety guarantees
 
 USAGE:
   In exactly one source file, define the implementation macro
@@ -68,17 +64,26 @@ typedef struct Pini_Context {
     Pini_Section *sections;
 } Pini_Context;
 
+typedef enum Pini_Error_Code {
+    PINI_OK,
+    PINI_SECTION_NOT_EXIST,
+    PINI_KEY_NOT_EXIST,
+    PINI_TYPE_MISMATCH
+} Pini_Error_Code;
+
+typedef struct Pini_Query {
+    const char *section;
+    const char *key;
+    Pini_Error_Code errcode;
+} Pini_Query;
+
 bool pini_load(Pini_Context *ctx, const char *filename);
 void pini_unload(Pini_Context *ctx);
 void pini_dump(Pini_Context *ctx);
-Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name);
-bool pini_has_section(Pini_Context *ctx, const char *section_name);
-static inline bool pini_is_number(Pini_Value *val)  { return val->type == PINI_VALUE_NUMBER; }
-static inline bool pini_is_boolean(Pini_Value *val) { return val->type == PINI_VALUE_BOOLEAN; }
-static inline bool pini_is_string(Pini_Value *val)  { return val->type == PINI_VALUE_STRING; }
-static inline double pini_to_number(Pini_Value *val)      { return val->as.number; }
-static inline bool pini_to_boolean(Pini_Value *val)       { return val->as.boolean; }
-static inline const char *pini_to_string(Pini_Value *val) { return val->as.string; }
+double pini_get_number(Pini_Context *ctx, Pini_Query *query);
+bool pini_get_boolean(Pini_Context *ctx, Pini_Query *query);
+const char *pini_get_string(Pini_Context *ctx, Pini_Query *query);
+bool pini_has(Pini_Context *ctx, const char *section_name, const char *key_name);
 
 #endif // PINI_H
 
@@ -153,6 +158,7 @@ static char *pini__strndup(const char *s, size_t n)
 // TODO: use hash table
 static Pini_Section *pini__get_section(Pini_Section *sections, const char *name)
 {
+    if (!name) return NULL;
     pini__vec_foreach(Pini_Section, sections, section) {
         if (strcmp(section->name, name) == 0) return section;
     }
@@ -162,6 +168,7 @@ static Pini_Section *pini__get_section(Pini_Section *sections, const char *name)
 // TODO: use hash table
 static Pini_Pair *pini__get_pair(Pini_Pair *pairs, const char *name)
 {
+    if (!name) return NULL;
     pini__vec_foreach(Pini_Pair, pairs, pair) {
         if (strcmp(pair->key, name) == 0) return pair;
     }
@@ -334,24 +341,59 @@ void pini_unload(Pini_Context *ctx)
     ctx->current_section = NULL;
 }
 
-Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name)
+#define pini__query_return(code) do { query->errcode = code; goto exit; } while (0)
+#define pini__query(valtype)                                                  \
+    Pini_Section *section = pini__get_section(ctx->sections, query->section); \
+    if (!section) pini__query_return(PINI_SECTION_NOT_EXIST);                 \
+    Pini_Pair *pair = pini__get_pair(section->pairs, query->key);             \
+    if (!pair) pini__query_return(PINI_KEY_NOT_EXIST);                        \
+    if (pair->val.type != valtype) pini__query_return(PINI_TYPE_MISMATCH)
+
+double pini_get_number(Pini_Context *ctx, Pini_Query *query)
 {
-    if (!section_name) return NULL;
-    Pini_Section *section = pini__get_section(ctx->sections, section_name);
-    if (!section) return NULL;
-    Pini_Pair *pair = pini__get_pair(section->pairs, key_name);
-    if (!pair) return NULL;
-    return &pair->val;
+    double result = 0;
+    pini__query(PINI_VALUE_NUMBER);
+    result = pair->val.as.number;
+exit:
+    return result;
 }
 
-// TODO: use hash table
-bool pini_has_section(Pini_Context *ctx, const char *section_name)
+bool pini_get_boolean(Pini_Context *ctx, Pini_Query *query)
 {
-    pini__vec_foreach(Pini_Section, ctx->sections, section) {
-        if (strcmp(section->name, section_name) == 0) return true;
-    }
-    return false;
+    bool result = false;
+    pini__query(PINI_VALUE_BOOLEAN);
+    result = pair->val.as.boolean;
+exit:
+    return result;
 }
+
+const char *pini_get_string(Pini_Context *ctx, Pini_Query *query)
+{
+    const char *result = NULL;
+    pini__query(PINI_VALUE_STRING);
+    result = (const char *)pair->val.as.string;
+exit:
+    return result;
+}
+
+bool pini_has(Pini_Context *ctx, const char *section_name, const char *key_name)
+{
+    // key_name == NULL means do not care about wheter key exists or not
+
+    if (!section_name) return false;
+    Pini_Section *section = pini__get_section(ctx->sections, section_name);
+    if (!section) return false;
+
+    if (key_name) {
+        Pini_Pair *pair = pini__get_pair(section->pairs, key_name);
+        if (!pair) return false;
+    }
+
+    return true;
+}
+
+#undef pini__query
+#undef pini__query_return
 
 #undef pini__vec_header
 #undef pini__vec_size

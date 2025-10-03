@@ -22,11 +22,11 @@ ffi.cdef[[
     bool pini_load(Pini_Context *ctx, const char *filename);
     void pini_unload(Pini_Context *ctx);
     void pini_dump(Pini_Context *ctx);
-    Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name);
-    bool pini_has_section(Pini_Context *ctx, const char *section_name);
+    bool pini_has(Pini_Context *ctx, const char *section_name, const char *key_name);
 
     Pini_Context *pini_new_context(void);
     void pini_free_context(Pini_Context *ctx);
+    Pini_Value *pini_lookup(Pini_Context *ctx, const char *section_name, const char *key_name);
 ]]
 
 -- load dynamic library
@@ -80,8 +80,8 @@ function pini:lookup(section, key)
     end
 end
 
-function pini:has(section)
-    return cpini.pini_has_section(self.ctx, section)
+function pini:has(section, key)
+    return cpini.pini_has(self.ctx, section, key)
 end
 
 function pini:dump()
