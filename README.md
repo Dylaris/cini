@@ -1,26 +1,24 @@
-# pini.h
+# cini.h
 
 ## Brief
 
-Parser of 'ini' file implemented with C99 as a stb-style library.
+Write/Read 'ini' file implemented with C99 as a stb-style library.
 
 ## Usage
 
+- read
+
 ```c
-    Pini_Context ctx;
-    pini_load(&ctx, "config.ini");
+    Cini_Context ctx = {0};
+    cini_load(&ctx, "config.ini");
+    Cini_String val = cini_get(&ctx, "aaa", "name");
+    if (cini_ok(val)) printf("[aaa] name = %.*s\n", (int)val.length, val.start);
+```
 
-    Pini_Query query = {.section = "profile"};
+- write
 
-    query.key = "name";
-    const char *name = pini_get_string(&ctx, &query);
-    if (query->errcode != PINI_OK) {...}
-
-    query.key = "age";
-    size_t age = pini_get_number(&ctx, &query);
-
-    query.key = "flag";
-    bool flag = pini_get_boolean(&ctx, &query);
-
-    pini_unload(&ctx);
+```c
+    Cini_Context ctx = {0};
+    cini_set(&ctx, "aaa", "name", "aris");
+    cini_generate_file(&ctx, "config.ini");
 ```
