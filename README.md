@@ -1,4 +1,4 @@
-# cini.h
+# cini
 
 ## Brief
 
